@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### 2026-06-20 14:05 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：测试补全（覆盖率提升）。
+- 涉及文件：
+  - `crates/quant-engine/tests/fundamental.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 为 `Weight` 公开转换契约补充集成测试：`TryFrom<f64> for Weight` 接受合法原始权重，以及 `From<Weight> for f64` 可回取底层数值。
+  - 覆盖此前 `cargo llvm-cov -p quant-engine --test fundamental` 报告中 `fundamental/mod.rs` 未覆盖的转换 trait 行。
+- 验证：
+  - `cargo fmt -p quant-engine` 通过。
+  - `cargo test -p quant-engine` 通过：20 个 fundamental 测试、16 个 percentile 测试、1 个 trend 测试、1 个 doc test 全部通过。
+  - `cargo llvm-cov -p quant-engine --test fundamental --summary-only --show-missing-lines` 通过：`crates/quant-engine/src/fundamental/mod.rs` 行覆盖率、函数覆盖率与 region 覆盖率均为 100%。
+
 ### 2026-06-20 13:56 UTC+10
 
 - 执行模型：GPT-5.5。

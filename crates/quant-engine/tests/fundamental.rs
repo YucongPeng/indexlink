@@ -8,7 +8,9 @@ use common::{
     EXACT_FLOAT_TOLERANCE, EXPENSIVE_SCORE_LOWER_BOUND, MAX_PERCENTILE, NEUTRAL_PERCENTILE,
     NEUTRAL_TOLERANCE, TEST_MIN_HISTORY_LEN, VERY_LOW_PERCENTILE_UPPER_BOUND,
 };
-use quant_engine::{evaluate_fundamental, FundamentalConfig, FundamentalSnapshot, QuantError};
+use quant_engine::{
+    evaluate_fundamental, FundamentalConfig, FundamentalSnapshot, QuantError, Weight,
+};
 
 #[test]
 fn fundamental_expensive_market() {
@@ -130,6 +132,19 @@ fn default_config_matches_readme_contract() {
 fn weight_display_uses_percent_format_for_audit_logs() {
     let cfg = FundamentalConfig::default();
     assert_eq!(cfg.cape_weight.to_string(), "50.0%");
+}
+
+#[test]
+fn weight_try_from_accepts_valid_raw_value() {
+    let weight = Weight::try_from(BALANCED_CAPE_WEIGHT).unwrap();
+    assert_eq!(weight.value(), BALANCED_CAPE_WEIGHT);
+}
+
+#[test]
+fn weight_converts_into_raw_f64() {
+    let weight = Weight::new(BALANCED_CAPE_WEIGHT).unwrap();
+    let raw: f64 = weight.into();
+    assert_eq!(raw, BALANCED_CAPE_WEIGHT);
 }
 
 #[test]
