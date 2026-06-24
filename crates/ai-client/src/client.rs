@@ -136,7 +136,10 @@ impl QwenClient {
 
     /// 拼接 chat completions 端点 URL。
     fn chat_url(&self) -> String {
-        format!("{}/v1/chat/completions", self.config.base_url.trim_end_matches('/'))
+        format!(
+            "{}/v1/chat/completions",
+            self.config.base_url.trim_end_matches('/')
+        )
     }
 
     /// 执行 HTTP 请求并解析响应。
@@ -170,7 +173,10 @@ impl QwenClient {
 
         let status = response.status();
         if !status.is_success() {
-            warn!(status = status.as_u16(), "AI service returned non-success status");
+            warn!(
+                status = status.as_u16(),
+                "AI service returned non-success status"
+            );
             return Err(AiClientError::HttpStatus {
                 status: status.as_u16(),
             });

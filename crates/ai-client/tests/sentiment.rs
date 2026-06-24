@@ -74,7 +74,6 @@ fn sentiment_neutral_is_default_degradation_target() {
     assert_eq!(Sentiment::neutral().value(), 0.0);
 
     // 模拟退化场景：解析失败 → neutral
-    let result: Result<Sentiment, &str> = Err("模拟 LLM 不可用");
-    let safe = result.unwrap_or_else(|_| Sentiment::neutral());
+    let safe = Sentiment::neutral();
     assert_eq!(safe, Sentiment::NEUTRAL);
 }

@@ -12,6 +12,7 @@ use tokio::net::TcpListener;
 // ─── Mock Server Helpers ─────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct MockRequest {
     model: String,
     messages: Vec<MockMessage>,
@@ -62,7 +63,8 @@ async fn spawn_mock_server() -> SocketAddr {
 
             // 根据用户输入的信号返回对应 sentiment
             let user_content = &body.messages[1].content;
-            let sentiment = if user_content.contains("大幅上涨") || user_content.contains("利好") {
+            let sentiment = if user_content.contains("大幅上涨") || user_content.contains("利好")
+            {
                 0.7
             } else if user_content.contains("大幅下跌") || user_content.contains("利空") {
                 -0.6
@@ -74,10 +76,14 @@ async fn spawn_mock_server() -> SocketAddr {
         }),
     );
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind mock server");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server");
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("mock server crashed");
+        axum::serve(listener, app)
+            .await
+            .expect("mock server crashed");
     });
     addr
 }

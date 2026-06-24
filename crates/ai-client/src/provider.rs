@@ -76,7 +76,11 @@ impl fmt::Debug for AiConfig {
 
 impl fmt::Display for AiConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "AiConfig(model={}, base_url={})", self.model, self.base_url)
+        write!(
+            f,
+            "AiConfig(model={}, base_url={})",
+            self.model, self.base_url
+        )
     }
 }
 

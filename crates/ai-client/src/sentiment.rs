@@ -85,7 +85,7 @@ impl Sentiment {
     /// 返回中性情绪（0.0）。
     ///
     /// 用于 LLM 不可用、超时、解析失败时的显式降级。
-    #[must_use]
+    #[must_use = "returns a Sentiment value that should not be discarded"]
     pub fn neutral() -> Self {
         Self::NEUTRAL
     }
@@ -211,10 +211,7 @@ mod tests {
 
     #[test]
     fn sentiment_error_display() {
-        assert_eq!(
-            SentimentError::Nan.to_string(),
-            "sentiment must not be NaN"
-        );
+        assert_eq!(SentimentError::Nan.to_string(), "sentiment must not be NaN");
         assert_eq!(
             SentimentError::OutOfRange { value: -2.0 }.to_string(),
             "sentiment must be in [-1.0, 1.0], got -2"

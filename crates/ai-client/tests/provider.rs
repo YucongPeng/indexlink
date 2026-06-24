@@ -73,8 +73,7 @@ async fn mock_provider_returns_neutral() {
 
 #[tokio::test]
 async fn mock_provider_returns_error_then_degradation() {
-    let provider =
-        MockAiProvider::with_error(AiClientError::Timeout { seconds: 30 });
+    let provider = MockAiProvider::with_error(AiClientError::Timeout { seconds: 30 });
     let result = provider.analyze("新闻").await;
     assert!(result.is_err());
     // 模拟退化

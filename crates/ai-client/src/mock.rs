@@ -143,7 +143,10 @@ mod tests {
     #[tokio::test]
     async fn mock_negative_weak() {
         let mock = MockAiProvider::new();
-        let s = mock.analyze("受加息预期影响，科技股普遍下跌").await.unwrap();
+        let s = mock
+            .analyze("受加息预期影响，科技股普遍下跌")
+            .await
+            .unwrap();
         assert!((-0.5..-0.1).contains(&s.value()));
     }
 
