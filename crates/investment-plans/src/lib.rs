@@ -134,7 +134,7 @@ impl UpdateInvestmentPlan {
     /// 规范化并校验更新输入。
     ///
     /// 当同时更新 `base_contribution` 与 `max_single_execution` 时，会校验二者关系；
-    /// 只更新其中一项时，后续 application service 需结合当前计划再次校验最终状态。
+    /// 只更新其中一项时，repository update 路径需结合当前计划再次校验最终状态。
     pub fn normalize(self) -> Result<Self, PlanValidationError> {
         if self.name.is_none()
             && self.base_contribution.is_none()
@@ -211,11 +211,31 @@ pub trait InvestmentPlanRepository: Send + Sync {
 
     /// 按 ID 查询投资计划。
     async fn get(&self, id: Uuid) -> Result<InvestmentPlan, PlanRepositoryError>;
+
+    /// 更新投资计划。
+    ///
+    /// 实现方必须在同一个原子写入路径中读取当前计划、合并已规范化的更新输入、
+    /// 校验最终金额组合，并写入结果。
+    async fn update(
+        &self,
+        id: Uuid,
+        input: UpdateInvestmentPlan,
+    ) -> Result<InvestmentPlan, PlanRepositoryError>;
+
+    /// 设置投资计划启停状态。
+    async fn set_active(
+        &self,
+        id: Uuid,
+        is_active: bool,
+    ) -> Result<InvestmentPlan, PlanRepositoryError>;
 }
 
 /// Repository port 的安全错误。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PlanRepositoryError {
+    /// 输入未通过领域校验。
+    #[error(transparent)]
+    Validation(#[from] PlanValidationError),
     /// 计划不存在。
     #[error("investment plan not found")]
     NotFound,
@@ -257,6 +277,30 @@ impl InvestmentPlanService {
     pub async fn get(&self, id: Uuid) -> Result<InvestmentPlan, PlanApplicationError> {
         self.repository.get(id).await.map_err(Into::into)
     }
+
+    /// 更新投资计划。
+    ///
+    /// 先规范化输入；最终金额组合校验由 repository 在原子写入路径内完成。
+    pub async fn update(
+        &self,
+        id: Uuid,
+        input: UpdateInvestmentPlan,
+    ) -> Result<InvestmentPlan, PlanApplicationError> {
+        let input = input.normalize()?;
+        self.repository.update(id, input).await.map_err(Into::into)
+    }
+
+    /// 设置投资计划启停状态。
+    pub async fn set_active(
+        &self,
+        id: Uuid,
+        is_active: bool,
+    ) -> Result<InvestmentPlan, PlanApplicationError> {
+        self.repository
+            .set_active(id, is_active)
+            .await
+            .map_err(Into::into)
+    }
 }
 
 /// 应用服务错误。
@@ -276,6 +320,7 @@ pub enum PlanApplicationError {
 impl From<PlanRepositoryError> for PlanApplicationError {
     fn from(error: PlanRepositoryError) -> Self {
         match error {
+            PlanRepositoryError::Validation(error) => Self::Validation(error),
             PlanRepositoryError::NotFound => Self::NotFound,
             PlanRepositoryError::Unavailable => Self::Unavailable,
         }
@@ -347,10 +392,12 @@ mod tests {
     use serde_json::{json, Value};
     use std::sync::Mutex;
 
+    /// 构造测试用 Decimal，避免测试中出现浮点字面量。
     fn money(value: &str) -> Decimal {
         value.parse().unwrap()
     }
 
+    /// 构造一份尚未规范化的创建输入，供领域和服务测试复用。
     fn create_input() -> CreateInvestmentPlan {
         CreateInvestmentPlan {
             name: "  VOO monthly DCA  ".to_owned(),
@@ -363,6 +410,7 @@ mod tests {
         }
     }
 
+    /// 将已规范化的创建输入转换成 fake repository 中的持久化计划。
     fn plan_from(id: Uuid, input: CreateInvestmentPlan) -> InvestmentPlan {
         let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
         InvestmentPlan {
@@ -380,14 +428,27 @@ mod tests {
         }
     }
 
+    /// 基于内存锁的 repository fake，用于验证应用服务与 repository port 契约。
     #[derive(Default)]
     struct FakeRepository {
         plans: Mutex<Vec<InvestmentPlan>>,
         fail: bool,
     }
 
+    /// 在 fake repository 的锁保护数据中按 ID 找到可变计划。
+    fn find_plan_mut(
+        plans: &mut [InvestmentPlan],
+        id: Uuid,
+    ) -> Result<&mut InvestmentPlan, PlanRepositoryError> {
+        plans
+            .iter_mut()
+            .find(|plan| plan.id == id)
+            .ok_or(PlanRepositoryError::NotFound)
+    }
+
     #[async_trait]
     impl InvestmentPlanRepository for FakeRepository {
+        /// 创建计划并追加到内存集合。
         async fn create(
             &self,
             input: CreateInvestmentPlan,
@@ -401,6 +462,7 @@ mod tests {
             Ok(plan)
         }
 
+        /// 返回当前内存集合快照。
         async fn list(&self) -> Result<Vec<InvestmentPlan>, PlanRepositoryError> {
             if self.fail {
                 return Err(PlanRepositoryError::Unavailable);
@@ -408,6 +470,7 @@ mod tests {
             Ok(self.plans.lock().unwrap().clone())
         }
 
+        /// 按 ID 读取计划，失败开关用于覆盖 unavailable 映射。
         async fn get(&self, id: Uuid) -> Result<InvestmentPlan, PlanRepositoryError> {
             if self.fail {
                 return Err(PlanRepositoryError::Unavailable);
@@ -420,6 +483,58 @@ mod tests {
                 .cloned()
                 .ok_or(PlanRepositoryError::NotFound)
         }
+
+        /// 在同一把锁内合并、校验并写入计划更新。
+        async fn update(
+            &self,
+            id: Uuid,
+            input: UpdateInvestmentPlan,
+        ) -> Result<InvestmentPlan, PlanRepositoryError> {
+            if self.fail {
+                return Err(PlanRepositoryError::Unavailable);
+            }
+            let mut plans = self.plans.lock().unwrap();
+            let plan = find_plan_mut(&mut plans, id)?;
+            let base = input.base_contribution.unwrap_or(plan.base_contribution);
+            let max = input
+                .max_single_execution
+                .unwrap_or(plan.max_single_execution);
+            validate_amounts(base, max)?;
+
+            if let Some(name) = input.name {
+                plan.name = name;
+            }
+            if let Some(base) = input.base_contribution {
+                plan.base_contribution = base;
+            }
+            if let Some(day) = input.schedule_day {
+                plan.schedule_day = day;
+            }
+            if let Some(max) = input.max_single_execution {
+                plan.max_single_execution = max;
+            }
+            if let Some(is_active) = input.is_active {
+                plan.is_active = is_active;
+            }
+            plan.updated_at = OffsetDateTime::from_unix_timestamp(1_700_000_001).unwrap();
+            Ok(plan.clone())
+        }
+
+        /// 在同一把锁内切换计划启停状态。
+        async fn set_active(
+            &self,
+            id: Uuid,
+            is_active: bool,
+        ) -> Result<InvestmentPlan, PlanRepositoryError> {
+            if self.fail {
+                return Err(PlanRepositoryError::Unavailable);
+            }
+            let mut plans = self.plans.lock().unwrap();
+            let plan = find_plan_mut(&mut plans, id)?;
+            plan.is_active = is_active;
+            plan.updated_at = OffsetDateTime::from_unix_timestamp(1_700_000_001).unwrap();
+            Ok(plan.clone())
+        }
     }
 
     #[derive(Debug, Deserialize, Serialize)]
@@ -428,6 +543,7 @@ mod tests {
         amount: Decimal,
     }
 
+    /// 验证 JSON 字符串金额可以无浮点损失地反序列化。
     #[test]
     fn decimal_deserializes_from_json_string_without_float() {
         let payload = r#"{"amount":"1000.0001"}"#;
@@ -437,6 +553,7 @@ mod tests {
         assert_eq!(decoded.amount.to_string(), "1000.0001");
     }
 
+    /// 验证金额序列化到 JSON 时仍保持字符串形态。
     #[test]
     fn decimal_serializes_to_json_string_without_float() {
         let payload = DecimalContract {
@@ -449,6 +566,7 @@ mod tests {
         assert!(matches!(encoded["amount"], Value::String(_)));
     }
 
+    /// 验证 API 边界拒绝 JSON number，避免引入浮点精度风险。
     #[test]
     fn decimal_rejects_json_number_at_api_boundary() {
         let result = serde_json::from_value::<DecimalContract>(json!({"amount": 1000.00}));
@@ -456,6 +574,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// 验证创建输入会裁剪文本并规范化 symbol/currency。
     #[test]
     fn create_plan_normalizes_text_fields() {
         let input = create_input().normalize().unwrap();
@@ -465,6 +584,7 @@ mod tests {
         assert_eq!(input.currency, "USD");
     }
 
+    /// 验证创建输入拒绝低于基准金额的单次执行上限。
     #[test]
     fn create_plan_rejects_invalid_amount_relationship() {
         let mut input = create_input();
@@ -476,6 +596,7 @@ mod tests {
         );
     }
 
+    /// 验证创建输入拒绝非法执行日和币种。
     #[test]
     fn create_plan_rejects_invalid_schedule_day_and_currency() {
         let mut bad_day = create_input();
@@ -493,6 +614,7 @@ mod tests {
         );
     }
 
+    /// 验证 symbol 只能使用 ASCII 字符。
     #[test]
     fn create_plan_rejects_non_ascii_symbol() {
         let mut input = create_input();
@@ -501,6 +623,7 @@ mod tests {
         assert_eq!(input.normalize(), Err(PlanValidationError::InvalidSymbol));
     }
 
+    /// 验证空 PATCH 不会进入更新流程。
     #[test]
     fn update_plan_rejects_empty_patch() {
         assert_eq!(
@@ -509,6 +632,7 @@ mod tests {
         );
     }
 
+    /// 验证更新输入会规范化名称并校验同时提交的金额组合。
     #[test]
     fn update_plan_normalizes_name_and_validates_amounts() {
         let update = UpdateInvestmentPlan {
@@ -523,6 +647,7 @@ mod tests {
         assert_eq!(update.name.as_deref(), Some("Core plan"));
     }
 
+    /// 验证创建输入中的金额字段保持 JSON 字符串契约。
     #[test]
     fn decimal_fields_remain_json_strings_on_create_input() {
         let encoded = serde_json::to_value(create_input()).unwrap();
@@ -531,6 +656,7 @@ mod tests {
         assert!(matches!(encoded["max_single_execution"], Value::String(_)));
     }
 
+    /// 验证 service 在持久化前会规范化创建输入。
     #[tokio::test]
     async fn service_normalizes_create_input_before_persisting() {
         let service = InvestmentPlanService::new(Arc::new(FakeRepository::default()));
@@ -542,6 +668,7 @@ mod tests {
         assert_eq!(plan.currency, "USD");
     }
 
+    /// 验证非法创建输入会在进入 repository 前被拒绝。
     #[tokio::test]
     async fn service_rejects_invalid_create_before_repository() {
         let service = InvestmentPlanService::new(Arc::new(FakeRepository::default()));
@@ -556,6 +683,7 @@ mod tests {
         );
     }
 
+    /// 验证 service 通过 repository port 完成列表和单条读取。
     #[tokio::test]
     async fn service_lists_and_gets_plans_through_repository() {
         let service = InvestmentPlanService::new(Arc::new(FakeRepository::default()));
@@ -566,6 +694,7 @@ mod tests {
         assert_eq!(service.get(created.id).await.unwrap(), created);
     }
 
+    /// 验证 repository 错误会映射为安全的 application 错误。
     #[tokio::test]
     async fn service_maps_repository_errors_to_safe_application_errors() {
         let service = InvestmentPlanService::new(Arc::new(FakeRepository::default()));
@@ -587,5 +716,68 @@ mod tests {
             unavailable.get(Uuid::from_u128(1)).await,
             Err(PlanApplicationError::Unavailable)
         );
+    }
+
+    /// 验证 service update 能更新允许变更的计划字段。
+    #[tokio::test]
+    async fn service_updates_plan_fields() {
+        let service = InvestmentPlanService::new(Arc::new(FakeRepository::default()));
+        let created = service.create(create_input()).await.unwrap();
+
+        let updated = service
+            .update(
+                created.id,
+                UpdateInvestmentPlan {
+                    name: Some("  Core ETF  ".to_owned()),
+                    schedule_day: Some(20),
+                    max_single_execution: Some(money("2000.00")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated.name, "Core ETF");
+        assert_eq!(updated.schedule_day, 20);
+        assert_eq!(updated.max_single_execution, money("2000.00"));
+        assert!(updated.updated_at > created.updated_at);
+    }
+
+    /// 验证 repository update 路径会拒绝最终金额组合非法的更新。
+    #[tokio::test]
+    async fn service_rejects_update_that_breaks_final_amount_limit() {
+        let service = InvestmentPlanService::new(Arc::new(FakeRepository::default()));
+        let created = service.create(create_input()).await.unwrap();
+
+        assert_eq!(
+            service
+                .update(
+                    created.id,
+                    UpdateInvestmentPlan {
+                        base_contribution: Some(money("2000.00")),
+                        ..Default::default()
+                    },
+                )
+                .await,
+            Err(PlanApplicationError::Validation(
+                PlanValidationError::MaxBelowBaseContribution
+            ))
+        );
+        assert_eq!(
+            service.get(created.id).await.unwrap().base_contribution,
+            money("1000.00")
+        );
+    }
+
+    /// 验证 service 能通过专用用例切换计划启停状态。
+    #[tokio::test]
+    async fn service_sets_active_state() {
+        let service = InvestmentPlanService::new(Arc::new(FakeRepository::default()));
+        let created = service.create(create_input()).await.unwrap();
+
+        let disabled = service.set_active(created.id, false).await.unwrap();
+
+        assert!(!disabled.is_active);
+        assert!(disabled.updated_at > created.updated_at);
     }
 }
