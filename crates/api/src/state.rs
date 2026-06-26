@@ -1,7 +1,8 @@
 use std::{fmt, sync::Arc};
 
 use async_trait::async_trait;
-use indexlink_storage::Storage;
+use indexlink_storage::{PostgresInvestmentPlanRepository, Storage};
+use investment_plans::InvestmentPlanService;
 
 enum ReadinessBackend {
     Storage(Storage),
@@ -18,18 +19,34 @@ impl fmt::Debug for ReadinessBackend {
 }
 
 /// HTTP API 的共享应用状态。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ApiState {
     readiness: Arc<ReadinessBackend>,
+    plans: InvestmentPlanService,
     version: Arc<str>,
+}
+
+impl fmt::Debug for ApiState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ApiState")
+            .field("readiness", &self.readiness)
+            .field("plans", &"InvestmentPlanService")
+            .field("version", &self.version)
+            .finish()
+    }
 }
 
 impl ApiState {
     /// 使用生产 PostgreSQL 存储构建应用状态。
     #[must_use]
     pub fn new(storage: Storage, version: impl Into<Arc<str>>) -> Self {
+        let plans = InvestmentPlanService::new(Arc::new(PostgresInvestmentPlanRepository::new(
+            storage.pool().clone(),
+        )));
         Self {
             readiness: Arc::new(ReadinessBackend::Storage(storage)),
+            plans,
             version: version.into(),
         }
     }
@@ -40,8 +57,23 @@ impl ApiState {
         readiness: Arc<dyn ReadinessCheck>,
         version: impl Into<Arc<str>>,
     ) -> Self {
+        Self::with_readiness_and_plans(
+            readiness,
+            InvestmentPlanService::new(Arc::new(UnavailableInvestmentPlans)),
+            version,
+        )
+    }
+
+    /// 使用可替换的 readiness 与 investment plan service 构建状态。
+    #[must_use]
+    pub fn with_readiness_and_plans(
+        readiness: Arc<dyn ReadinessCheck>,
+        plans: InvestmentPlanService,
+        version: impl Into<Arc<str>>,
+    ) -> Self {
         Self {
             readiness: Arc::new(ReadinessBackend::Custom(readiness)),
+            plans,
             version: version.into(),
         }
     }
@@ -59,6 +91,10 @@ impl ApiState {
     pub(crate) fn version(&self) -> &str {
         self.version.as_ref()
     }
+
+    pub(crate) fn plans(&self) -> &InvestmentPlanService {
+        &self.plans
+    }
 }
 
 /// 可替换的服务就绪检查。
@@ -66,6 +102,47 @@ impl ApiState {
 pub trait ReadinessCheck: Send + Sync {
     /// 检查依赖是否可用。
     async fn check(&self) -> Result<(), ReadinessError>;
+}
+
+struct UnavailableInvestmentPlans;
+
+#[async_trait]
+impl investment_plans::InvestmentPlanRepository for UnavailableInvestmentPlans {
+    async fn create(
+        &self,
+        _input: investment_plans::CreateInvestmentPlan,
+    ) -> Result<investment_plans::InvestmentPlan, investment_plans::PlanRepositoryError> {
+        Err(investment_plans::PlanRepositoryError::Unavailable)
+    }
+
+    async fn list(
+        &self,
+    ) -> Result<Vec<investment_plans::InvestmentPlan>, investment_plans::PlanRepositoryError> {
+        Err(investment_plans::PlanRepositoryError::Unavailable)
+    }
+
+    async fn get(
+        &self,
+        _id: uuid::Uuid,
+    ) -> Result<investment_plans::InvestmentPlan, investment_plans::PlanRepositoryError> {
+        Err(investment_plans::PlanRepositoryError::Unavailable)
+    }
+
+    async fn update(
+        &self,
+        _id: uuid::Uuid,
+        _input: investment_plans::UpdateInvestmentPlan,
+    ) -> Result<investment_plans::InvestmentPlan, investment_plans::PlanRepositoryError> {
+        Err(investment_plans::PlanRepositoryError::Unavailable)
+    }
+
+    async fn set_active(
+        &self,
+        _id: uuid::Uuid,
+        _is_active: bool,
+    ) -> Result<investment_plans::InvestmentPlan, investment_plans::PlanRepositoryError> {
+        Err(investment_plans::PlanRepositoryError::Unavailable)
+    }
 }
 
 /// readiness 检查的内部错误。
