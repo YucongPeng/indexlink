@@ -128,12 +128,20 @@ pub struct TrendConfig {
 
 impl TrendConfig {
     /// 构造趋势层配置。
-    ///
+    /// 
+    /// # 检查
+    /// 
+    /// 因为入参 weights: TrendWeights 表示权重已通过构造校验
+    /// 且入参 percentile_config: EwPercentileConfig 表示分位配置已通过构造校验
+    /// 因此本函数只负责校验两个阈值 raw f64
+    /// 
     /// # 错误
     ///
-    /// - [`QuantError::InvalidWeight`]：权重非法或不和为 1。
-    /// - [`QuantError::InvalidPercentileThreshold`]：分位阈值非法。
-    /// - 来自 [`EwPercentileConfig`] 构造的错误透传。
+    /// - [`QuantError::InvalidPercentileThreshold`]：`overheated_above` 或
+    ///   `falling_knife_above` 不是有限数，或不在 `[0.0, 1.0]`。
+    ///
+    /// `weights` 与 `percentile_config` 须由调用方预先构造；
+    /// 其校验错误分别见 [`TrendWeights::new`] 与 [`EwPercentileConfig::from_half_life`]。
     pub fn new(
         weights: TrendWeights,
         percentile_config: EwPercentileConfig,
