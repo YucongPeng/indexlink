@@ -1,9 +1,16 @@
 use axum::{http::StatusCode, response::IntoResponse, Json};
+use investment_plans::{PlanApplicationError, PlanValidationError};
 use serde::Serialize;
 
 /// API 错误。
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
+    /// 请求参数或载荷未通过校验。
+    #[error("bad request")]
+    BadRequest,
+    /// 请求的资源不存在。
+    #[error("not found")]
+    NotFound,
     /// 依赖服务当前不可用。
     #[error("service unavailable")]
     ServiceUnavailable,
@@ -31,6 +38,26 @@ pub struct ErrorBody {
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         let (status, body) = match self {
+            Self::BadRequest => (
+                StatusCode::BAD_REQUEST,
+                ErrorEnvelope {
+                    error: ErrorBody {
+                        code: "bad_request",
+                        message: "invalid request",
+                        request_id: None,
+                    },
+                },
+            ),
+            Self::NotFound => (
+                StatusCode::NOT_FOUND,
+                ErrorEnvelope {
+                    error: ErrorBody {
+                        code: "not_found",
+                        message: "resource not found",
+                        request_id: None,
+                    },
+                },
+            ),
             Self::ServiceUnavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 ErrorEnvelope {
@@ -44,6 +71,24 @@ impl IntoResponse for ApiError {
         };
 
         (status, Json(body)).into_response()
+    }
+}
+
+impl From<PlanApplicationError> for ApiError {
+    /// Convert application-layer errors into safe API errors.
+    fn from(error: PlanApplicationError) -> Self {
+        match error {
+            PlanApplicationError::Validation(_) => Self::BadRequest,
+            PlanApplicationError::NotFound => Self::NotFound,
+            PlanApplicationError::Unavailable => Self::ServiceUnavailable,
+        }
+    }
+}
+
+impl From<PlanValidationError> for ApiError {
+    /// Convert validation errors into the public bad-request envelope.
+    fn from(_: PlanValidationError) -> Self {
+        Self::BadRequest
     }
 }
 
