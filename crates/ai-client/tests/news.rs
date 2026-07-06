@@ -48,10 +48,7 @@ async fn real_cnbc_with_mock() {
         );
     }
     let sentiment = fetch_market_sentiment(&source, &ai).await.unwrap();
-    println!(
-        "\n===== Mock Market Sentiment: {} =====\n",
-        sentiment
-    );
+    println!("\n===== Mock Market Sentiment: {} =====\n", sentiment);
 
     assert!(
         (-1.0..=1.0).contains(&sentiment.value()),
@@ -96,10 +93,7 @@ async fn real_cnbc_with_qwen() {
         );
     }
     let sentiment = fetch_market_sentiment(&source, &ai).await.unwrap();
-    println!(
-        "\n===== Qwen Market Sentiment: {} =====\n",
-        sentiment
-    );
+    println!("\n===== Qwen Market Sentiment: {} =====\n", sentiment);
 
     assert!(
         (-1.0..=1.0).contains(&sentiment.value()),
